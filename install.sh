@@ -218,6 +218,7 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const cors = require('cors');
 const OpenAI = require('openai');
+const path = require('path');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -225,7 +226,7 @@ const port = process.env.PORT || 3000;
 // Middleware
 app.use(cors());
 app.use(bodyParser.json());
-app.use(express.static('static'));
+app.use(express.static(path.join(__dirname, 'static')));
 
 // Initialize OpenAI
 const openai = new OpenAI({
@@ -312,7 +313,12 @@ OPENAI_API_KEY=your-openai-api-key
 EOL
 
 # Create static directory and files
-mkdir -p $APP_DIR/static
+mkdir -p $APP_DIR/static || {
+    print_error "Failed to create static directory"
+    cleanup
+    exit 1
+}
+
 cat > $APP_DIR/static/index.html << EOL
 <!DOCTYPE html>
 <html>
@@ -530,6 +536,18 @@ npm install || {
     exit 1
 }
 
+# Verify OpenAI package installation
+if [ ! -d "$APP_DIR/node_modules/openai" ]; then
+    print_error "OpenAI package was not installed correctly"
+    print_status "Trying to install OpenAI package specifically..."
+    npm install openai@4.24.1 || {
+        print_error "Failed to install OpenAI package"
+        cleanup
+        exit 1
+    }
+    print_success "OpenAI package installed"
+fi
+
 # Backup existing Nginx configuration if it exists
 if [ -f "/etc/nginx/sites-available/jira-chatgpt" ]; then
     print_status "Backing up existing Nginx configuration..."
@@ -584,6 +602,13 @@ systemctl restart nginx || {
     exit 1
 }
 
+# Make app.js executable
+chmod +x $APP_DIR/app.js || {
+    print_error "Failed to make app.js executable"
+    cleanup
+    exit 1
+}
+
 # Set up PM2 to run the application
 print_status "Setting up PM2..."
 cd $APP_DIR
@@ -625,10 +650,31 @@ print_status "Setting correct permissions..."
 chown -R www-data:www-data $APP_DIR
 chmod -R 755 $APP_DIR
 
+# Final check to ensure the application is running
+print_status "Checking if the application is running..."
+sleep 5  # Give the application time to start
+
+# Ensure curl is installed for the health check
+if ! command_exists curl; then
+    print_status "Installing curl for health check..."
+    apt-get install -y curl || {
+        print_error "Failed to install curl"
+        print_status "Skipping health check"
+    }
+fi
+
+if command_exists curl && curl -s http://localhost:3000/health | grep -q "ok"; then
+    print_success "Application is running correctly!"
+else
+    print_error "Application may not be running correctly"
+    print_status "Check the logs with: pm2 logs jira-chatgpt"
+    print_status "You can restart the application with: pm2 restart jira-chatgpt"
+fi
+
 print_success "Installation completed successfully!"
 echo
 echo -e "${GREEN}Next steps:${NC}"
-echo "1. Edit $APP_DIR/.env and set your OpenAI API key"
+echo "1. Edit $APP_DIR/.env and set your OpenAI API key (if not already done)"
 echo "2. Set up SSL certificate by running: sudo certbot --nginx -d your-domain.com"
 echo "3. Access the application at: http://$(hostname -f)"
 echo
@@ -640,8 +686,23 @@ read -p "Would you like to enter your OpenAI API key now? (y/n) " -n 1 -r
 echo
 if [[ $REPLY =~ ^[Yy]$ ]]; then
     read -p "Enter your OpenAI API key: " api_key
-    sed -i "s/your-openai-api-key/$api_key/" $APP_DIR/.env
-    print_success "API key has been set"
+    if [ -z "$api_key" ]; then
+        print_error "API key cannot be empty"
+        print_status "You can set it later by editing $APP_DIR/.env"
+    else
+        sed -i "s/your-openai-api-key/$api_key/" $APP_DIR/.env
+        print_success "API key has been set"
+        
+        # Restart the application to apply the new API key
+        print_status "Restarting the application to apply the new API key..."
+        pm2 restart jira-chatgpt || {
+            print_error "Failed to restart the application"
+            print_status "You may need to restart it manually: pm2 restart jira-chatgpt"
+        }
+    fi
+else
+    print_status "You can set the API key later by editing $APP_DIR/.env"
+    print_status "After setting the API key, restart the application: pm2 restart jira-chatgpt"
 fi
 
 # Ask for domain name and set up SSL
@@ -743,4 +804,4 @@ The application is managed by PM2. Use the following commands for maintenance:
 ## Support
 
 For support, please contact the administrator.
-EOL 
+EOL
