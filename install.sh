@@ -613,10 +613,10 @@ chmod +x $APP_DIR/app.js || {
 print_status "Setting up PM2..."
 cd $APP_DIR
 if [ ! -f "app.js" ]; then
-    print_error "app.js not found in the repository"
+    print_error "app.js not found in the application directory"
     cleanup
     exit 1
-}
+fi
 
 pm2 start app.js --name jira-chatgpt || {
     print_error "Failed to start application with PM2"
