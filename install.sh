@@ -178,31 +178,96 @@ mkdir -p $APP_DIR || {
     exit 1
 }
 
-# Clone the repository
-print_status "Cloning the repository..."
-# Replace with your actual repository URL
-REPO_URL="https://github.com/yourusername/jira-chatgpt-integration.git"
-git clone $REPO_URL $APP_DIR || {
-    print_error "Failed to clone repository from $REPO_URL"
-    cleanup
-    exit 1
-}
+# Create application files
+print_status "Creating application files..."
 
-# Verify package.json exists
-if [ ! -f "$APP_DIR/package.json" ]; then
-    print_error "package.json not found in the repository"
-    cleanup
-    exit 1
-fi
-
-# Install application dependencies
-print_status "Installing application dependencies..."
-cd $APP_DIR
-npm install || {
-    print_error "Failed to install application dependencies"
-    cleanup
-    exit 1
+# Create package.json
+cat > $APP_DIR/package.json << EOL
+{
+  "name": "jira-chatgpt-integration",
+  "version": "1.0.0",
+  "description": "Jira Cloud ChatGPT Integration",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "body-parser": "^1.20.2",
+    "dotenv": "^16.0.3",
+    "@openai/ai": "^1.0.0",
+    "cors": "^2.8.5"
+  }
 }
+EOL
+
+# Create app.js
+cat > $APP_DIR/app.js << EOL
+require('dotenv').config();
+const express = require('express');
+const bodyParser = require('body-parser');
+const cors = require('cors');
+const { OpenAI } = require('@openai/ai');
+
+const app = express();
+const port = process.env.PORT || 3000;
+
+// Middleware
+app.use(cors());
+app.use(bodyParser.json());
+
+// Initialize OpenAI
+const openai = new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY
+});
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+    res.json({ status: 'ok' });
+});
+
+// ChatGPT endpoint
+app.post('/api/chatgpt', async (req, res) => {
+    try {
+        const { text, action, language, customPrompt } = req.body;
+        
+        if (!text || !action) {
+            return res.status(400).json({ error: 'Missing required parameters' });
+        }
+
+        const completion = await openai.chat.completions.create({
+            model: "gpt-4-turbo",
+            messages: [
+                { 
+                    role: "system", 
+                    content: "You are a helpful assistant that provides clear and concise responses." 
+                },
+                { 
+                    role: "user", 
+                    content: text 
+                }
+            ],
+            max_tokens: 1000
+        });
+
+        res.json({
+            success: true,
+            response: completion.choices[0].message.content,
+            tokenUsage: completion.usage.total_tokens
+        });
+    } catch (error) {
+        console.error('Error:', error);
+        res.status(500).json({ 
+            error: 'Failed to process request',
+            message: error.message 
+        });
+    }
+});
+
+app.listen(port, () => {
+    console.log(\`Server running on port \${port}\`);
+});
+EOL
 
 # Create .env file
 print_status "Creating environment configuration..."
@@ -212,6 +277,38 @@ PORT=3000
 HOST=$(hostname -f)
 OPENAI_API_KEY=your-openai-api-key
 EOL
+
+# Create static directory and files
+mkdir -p $APP_DIR/static
+cat > $APP_DIR/static/index.html << EOL
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Jira ChatGPT Integration</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .status { padding: 20px; border-radius: 5px; margin: 20px 0; }
+        .success { background-color: #e7f7e7; }
+        .error { background-color: #ffebee; }
+    </style>
+</head>
+<body>
+    <h1>Jira ChatGPT Integration</h1>
+    <div class="status success">
+        Server is running successfully!
+    </div>
+</body>
+</html>
+EOL
+
+# Install application dependencies
+print_status "Installing application dependencies..."
+cd $APP_DIR
+npm install || {
+    print_error "Failed to install application dependencies"
+    cleanup
+    exit 1
+}
 
 # Backup existing Nginx configuration if it exists
 if [ -f "/etc/nginx/sites-available/jira-chatgpt" ]; then
