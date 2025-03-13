@@ -612,12 +612,16 @@ chmod +x $APP_DIR/app.js || {
 # Set up PM2 to run the application
 print_status "Setting up PM2..."
 cd $APP_DIR
+
+# Check if app.js exists
 if [ ! -f "app.js" ]; then
     print_error "app.js not found in the application directory"
     cleanup
     exit 1
 fi
 
+# Start the application with PM2
+print_status "Starting application with PM2..."
 pm2 start app.js --name jira-chatgpt || {
     print_error "Failed to start application with PM2"
     cleanup
@@ -625,6 +629,7 @@ pm2 start app.js --name jira-chatgpt || {
 }
 
 # Save PM2 configuration
+print_status "Saving PM2 configuration..."
 pm2 save || {
     print_error "Failed to save PM2 configuration"
     cleanup
@@ -632,6 +637,7 @@ pm2 save || {
 }
 
 # Set up PM2 to start on boot
+print_status "Setting up PM2 to start on boot..."
 pm2 startup || {
     print_error "Failed to set up PM2 startup"
     cleanup
