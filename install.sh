@@ -58,6 +58,16 @@ fi
 print_status "Starting Jira ChatGPT Plugin installation..."
 print_status "This script will install all necessary dependencies and set up the plugin."
 
+# Check if lsof is installed
+if ! command_exists lsof; then
+    print_status "Installing lsof..."
+    apt-get install -y lsof || {
+        print_error "Failed to install lsof"
+        exit 1
+    }
+    print_success "lsof installed"
+fi
+
 # Check if port 3000 is available
 if port_in_use 3000; then
     print_error "Port 3000 is already in use. Please free up this port before continuing."
@@ -195,7 +205,7 @@ cat > $APP_DIR/package.json << EOL
     "express": "^4.18.2",
     "body-parser": "^1.20.2",
     "dotenv": "^16.0.3",
-    "@openai/ai": "^1.0.0",
+    "openai": "^4.24.1",
     "cors": "^2.8.5"
   }
 }
@@ -207,7 +217,7 @@ require('dotenv').config();
 const express = require('express');
 const bodyParser = require('body-parser');
 const cors = require('cors');
-const { OpenAI } = require('@openai/ai');
+const OpenAI = require('openai');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -215,6 +225,7 @@ const port = process.env.PORT || 3000;
 // Middleware
 app.use(cors());
 app.use(bodyParser.json());
+app.use(express.static('static'));
 
 // Initialize OpenAI
 const openai = new OpenAI({
@@ -235,16 +246,38 @@ app.post('/api/chatgpt', async (req, res) => {
             return res.status(400).json({ error: 'Missing required parameters' });
         }
 
+        let systemPrompt = "You are a helpful assistant that provides clear and concise responses.";
+        let userPrompt = text;
+
+        // Customize prompt based on action
+        switch (action) {
+            case 'explain':
+                systemPrompt = "You are a technical expert. Explain concepts clearly with examples.";
+                userPrompt = \`Please explain the following text: \${text}\`;
+                break;
+            case 'summarize':
+                systemPrompt = "You are a summarizer. Keep summaries concise and focused on key points.";
+                userPrompt = \`Please summarize the following text: \${text}\`;
+                break;
+            case 'translate':
+                systemPrompt = "You are a translator. Maintain the original meaning while translating.";
+                userPrompt = \`Translate the following text to \${language || 'English'}: \${text}\`;
+                break;
+            case 'custom':
+                userPrompt = \`\${customPrompt || 'Please analyze'}: \${text}\`;
+                break;
+        }
+
         const completion = await openai.chat.completions.create({
-            model: "gpt-4-turbo",
+            model: "gpt-3.5-turbo",
             messages: [
                 { 
                     role: "system", 
-                    content: "You are a helpful assistant that provides clear and concise responses." 
+                    content: systemPrompt
                 },
                 { 
                     role: "user", 
-                    content: text 
+                    content: userPrompt
                 }
             ],
             max_tokens: 1000
@@ -286,17 +319,204 @@ cat > $APP_DIR/static/index.html << EOL
 <head>
     <title>Jira ChatGPT Integration</title>
     <style>
-        body { font-family: Arial, sans-serif; margin: 20px; }
-        .status { padding: 20px; border-radius: 5px; margin: 20px 0; }
-        .success { background-color: #e7f7e7; }
-        .error { background-color: #ffebee; }
+        body { 
+            font-family: Arial, sans-serif; 
+            margin: 0;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        .status { 
+            padding: 20px; 
+            border-radius: 5px; 
+            margin: 20px 0; 
+        }
+        .success { 
+            background-color: #e7f7e7; 
+            border-left: 4px solid #28a745;
+        }
+        .error { 
+            background-color: #ffebee; 
+            border-left: 4px solid #dc3545;
+        }
+        .card {
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 20px;
+            margin: 20px 0;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #0052CC;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input, select, textarea {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        textarea {
+            min-height: 100px;
+        }
+        button {
+            background-color: #0052CC;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #0043A4;
+        }
+        #response {
+            white-space: pre-wrap;
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+            min-height: 100px;
+            margin-top: 10px;
+        }
+        .hidden {
+            display: none;
+        }
     </style>
 </head>
 <body>
-    <h1>Jira ChatGPT Integration</h1>
-    <div class="status success">
-        Server is running successfully!
+    <div class="container">
+        <h1>Jira ChatGPT Integration</h1>
+        
+        <div class="status success">
+            Server is running successfully!
+        </div>
+        
+        <div class="card">
+            <h2>Test the API</h2>
+            <div class="form-group">
+                <label for="action">Action:</label>
+                <select id="action">
+                    <option value="explain">Explain</option>
+                    <option value="summarize">Summarize</option>
+                    <option value="translate">Translate</option>
+                    <option value="custom">Custom Question</option>
+                </select>
+            </div>
+            
+            <div class="form-group language-group hidden">
+                <label for="language">Language:</label>
+                <select id="language">
+                    <option value="English">English</option>
+                    <option value="Spanish">Spanish</option>
+                    <option value="French">French</option>
+                    <option value="German">German</option>
+                    <option value="Chinese">Chinese</option>
+                    <option value="Japanese">Japanese</option>
+                    <option value="Russian">Russian</option>
+                </select>
+            </div>
+            
+            <div class="form-group custom-group hidden">
+                <label for="customPrompt">Custom Prompt:</label>
+                <input type="text" id="customPrompt" placeholder="Enter your question...">
+            </div>
+            
+            <div class="form-group">
+                <label for="text">Text:</label>
+                <textarea id="text" placeholder="Enter text to process..."></textarea>
+            </div>
+            
+            <button id="submit">Submit</button>
+            
+            <div class="form-group">
+                <label for="response">Response:</label>
+                <div id="response"></div>
+            </div>
+            
+            <div id="error" class="error hidden"></div>
+        </div>
     </div>
+    
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const actionSelect = document.getElementById('action');
+            const languageGroup = document.querySelector('.language-group');
+            const customGroup = document.querySelector('.custom-group');
+            
+            actionSelect.addEventListener('change', function() {
+                if (this.value === 'translate') {
+                    languageGroup.classList.remove('hidden');
+                } else {
+                    languageGroup.classList.add('hidden');
+                }
+                
+                if (this.value === 'custom') {
+                    customGroup.classList.remove('hidden');
+                } else {
+                    customGroup.classList.add('hidden');
+                }
+            });
+            
+            document.getElementById('submit').addEventListener('click', async function() {
+                const action = actionSelect.value;
+                const text = document.getElementById('text').value;
+                const language = document.getElementById('language').value;
+                const customPrompt = document.getElementById('customPrompt').value;
+                const responseElement = document.getElementById('response');
+                const errorElement = document.getElementById('error');
+                
+                if (!text) {
+                    errorElement.textContent = 'Please enter text to process';
+                    errorElement.classList.remove('hidden');
+                    return;
+                }
+                
+                errorElement.classList.add('hidden');
+                responseElement.textContent = 'Loading...';
+                
+                try {
+                    const response = await fetch('/api/chatgpt', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            action,
+                            text,
+                            language,
+                            customPrompt
+                        })
+                    });
+                    
+                    const data = await response.json();
+                    
+                    if (data.error) {
+                        errorElement.textContent = data.error;
+                        errorElement.classList.remove('hidden');
+                        responseElement.textContent = '';
+                    } else {
+                        responseElement.textContent = data.response;
+                    }
+                } catch (error) {
+                    errorElement.textContent = 'Error: ' + error.message;
+                    errorElement.classList.remove('hidden');
+                    responseElement.textContent = '';
+                }
+            });
+        });
+    </script>
 </body>
 </html>
 EOL
@@ -437,4 +657,90 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
     print_success "SSL certificate has been set up"
 fi
 
-print_status "Installation process completed. The plugin is now ready to use!" 
+print_status "Installation process completed. The plugin is now ready to use!"
+
+# Create README.md
+cat > $APP_DIR/README.md << EOL
+# Jira ChatGPT Integration
+
+This application integrates ChatGPT with Jira Cloud, allowing users to process text using OpenAI's GPT models.
+
+## Features
+
+- **Explain**: Get detailed explanations of technical concepts
+- **Summarize**: Create concise summaries of text
+- **Translate**: Translate text to different languages
+- **Custom Questions**: Ask custom questions about selected text
+
+## Technical Details
+
+- Built with Node.js and Express
+- Uses OpenAI's GPT-3.5 Turbo model
+- Deployed with PM2 for process management
+- Secured with Nginx as a reverse proxy
+
+## Configuration
+
+The application uses environment variables for configuration:
+
+- \`PORT\`: The port the server runs on (default: 3000)
+- \`HOST\`: The hostname for the server
+- \`OPENAI_API_KEY\`: Your OpenAI API key
+
+## API Endpoints
+
+### POST /api/chatgpt
+
+Process text with ChatGPT.
+
+**Request Body:**
+
+\`\`\`json
+{
+  "text": "Text to process",
+  "action": "explain|summarize|translate|custom",
+  "language": "English", // Only required for translate action
+  "customPrompt": "Your question" // Only required for custom action
+}
+\`\`\`
+
+**Response:**
+
+\`\`\`json
+{
+  "success": true,
+  "response": "ChatGPT response",
+  "tokenUsage": 123
+}
+\`\`\`
+
+### GET /health
+
+Check if the server is running.
+
+**Response:**
+
+\`\`\`json
+{
+  "status": "ok"
+}
+\`\`\`
+
+## Testing
+
+Visit http://your-server-address/ to access the test interface.
+
+## Maintenance
+
+The application is managed by PM2. Use the following commands for maintenance:
+
+- \`pm2 status\`: Check the status of the application
+- \`pm2 logs jira-chatgpt\`: View application logs
+- \`pm2 restart jira-chatgpt\`: Restart the application
+- \`pm2 stop jira-chatgpt\`: Stop the application
+- \`pm2 start jira-chatgpt\`: Start the application
+
+## Support
+
+For support, please contact the administrator.
+EOL 
